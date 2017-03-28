@@ -1,12 +1,21 @@
 var express = require('express')
 var bodyParser = require('body-parser')
 var mongodb = require('mongodb')
-var objectId = require('mongodb').ObjectId
-
+var ObjectId = require('mongodb').ObjectId
+var multiparty = require('connect-multiparty')
+var fs = require('fs')
 var app = express()
 
 app.use(bodyParser.urlencoded({extended: true}))
 app.use(bodyParser.json())
+app.use(multiparty())
+app.use(function (req, res, next) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE')
+  res.setHeader('Access-Control-Allow-Headers', 'content-type')
+  res.setHeader('Access-Control-Allow-Credentials', true)
+  next()
+})
 
 var port = 8080
 
@@ -23,26 +32,42 @@ app.get('/', function (req, res) {
 })
 
 app.post('/api', function (req, res) {
-  var dados = req.body
+  var date = new Date()
+  var timestamp = date.getTime()
+  var url = timestamp + '_' + req.files.arquivo.originalFilename
+  var originalPath = req.files.arquivo.path
+  var destinationPath = './uploads/' + url
 
-  db.open(function (err, mongoclient) {
+  fs.rename(originalPath, destinationPath, function (err) {
     if (err) {
-      res.json(err)
+      res.status(500).json({erros: err})
+      return
     }
 
-    mongoclient.collection('postagens', function (err, collection) {
+    var dados = {
+      url_image: url,
+      titulo: req.body.titulo
+    }
+
+    db.open(function (err, mongoclient) {
       if (err) {
         res.json(err)
       }
 
-      collection.insert(dados, function (err, records) {
+      mongoclient.collection('postagens', function (err, collection) {
         if (err) {
           res.json(err)
-        } else {
-          res.json(records)
         }
 
-        mongoclient.close()
+        collection.insert(dados, function (err, records) {
+          if (err) {
+            res.json(err)
+          } else {
+            res.json(records)
+          }
+
+          mongoclient.close()
+        })
       })
     })
   })
@@ -72,6 +97,19 @@ app.get('/api', function (req, res) {
   })
 })
 
+app.get('/imagens/:image', function (req, res) {
+  var img = req.params.image
+  fs.readFile('./uploads/' + img, function (err, content) {
+    if (err) {
+      res.status(400).json(err)
+      return
+    }
+
+    res.writeHead(200, {'content-type': 'image/jpg'})
+    res.end(content)
+  })
+})
+
 app.get('/api/:id', function (req, res) {
   db.open(function (err, mongoclient) {
     if (err) {
@@ -83,7 +121,7 @@ app.get('/api/:id', function (req, res) {
         res.json(err)
       }
 
-      collection.find(objectId(req.params.id)).toArray(function (err, result) {
+      collection.find(ObjectId(req.params.id)).toArray(function (err, result) {
         if (err) {
           res.json(err)
         } else {
@@ -108,8 +146,14 @@ app.put('/api/:id', function (req, res) {
       }
 
       collection.update(
-        {_id: objectId(req.params.id)},
-        {$set: {titulo: req.body.titulo}},
+        {_id: ObjectId(req.params.id)},
+        {$push: {
+          comentarios: {
+            id_comentario: new ObjectId(),
+            comentario: req.body.comentario
+          }
+        }
+        },
         {},
         function (err, records) {
           if (err) {
@@ -136,13 +180,20 @@ app.delete('/api/:id', function (req, res) {
         res.json(err)
       }
 
-      collection.remove({_id: objectId(req.params.id)}, function (err, records) {
-        if (err) {
-          res.json(err)
-        } else {
-          res.json(records)
+      collection.update(
+        {},
+        { $pull: {
+          comentarios: {id_comentario: ObjectId(req.params.id)}
         }
-      })
+        },
+        {multi: true},
+        function (err, records) {
+          if (err) {
+            res.json(err)
+          } else {
+            res.json(records)
+          }
+        })
 
       mongoclient.close()
     })
